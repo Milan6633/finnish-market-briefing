@@ -231,6 +231,63 @@ function dataPack(d) {
   return L.join('\n')
 }
 
+function renderDigest(d) {
+  const L = []
+  L.push(`# 🌍 Market Briefing — ${today}`)
+  L.push('')
+  L.push('> **Data-only edition.** No model key is configured, so this is a straight digest of verified numbers and sourced headlines — no narrative synthesis.')
+  L.push('')
+  L.push('## 🌍 Global')
+  L.push('')
+  L.push('| Rate | Level | As of |')
+  L.push('|---|---:|---|')
+  L.push(`| ECB deposit facility | ${d.dfr ? `${fmt(d.dfr.level)}%` : 'unavailable'} | ${d.dfr?.period ?? '—'} |`)
+  L.push(`| ECB main refinancing | ${d.mrr ? `${fmt(d.mrr.level)}%` : 'unavailable'} | ${d.mrr?.period ?? '—'} |`)
+  L.push(`| ECB marginal lending | ${d.mlfr ? `${fmt(d.mlfr.level)}%` : 'unavailable'} | ${d.mlfr?.period ?? '—'} |`)
+  L.push(`| Euribor 3m | ${d.e3 ? `${fmt(d.e3.level, 3)}%` : 'unavailable'} | ${d.e3?.date ?? '—'} |`)
+  L.push(`| Euribor 6m | ${d.e6 ? `${fmt(d.e6.level, 3)}%` : 'unavailable'} | ${d.e6?.date ?? '—'} |`)
+  L.push(`| Euribor 12m | ${d.e12 ? `${fmt(d.e12.level, 3)}%` : 'unavailable'} | ${d.e12?.date ?? '—'} |`)
+  L.push('')
+  L.push(`**OMXH25:** ${d.idx ? `${fmt(d.idx.price)} · day ${fmt(d.idx.day)}% · week ${fmt(d.idx.week)}% · month ${fmt(d.idx.month)}% · YoY ${fmt(d.idx.yoy)}%` : 'unavailable'}`)
+  L.push('')
+  L.push('## 🇫🇮 OMXH25 constituents')
+  L.push('')
+  L.push('| Company | Ticker | Price | Day % | Week % | Month % | YoY % |')
+  L.push('|---|---|---:|---:|---:|---:|---:|')
+  for (const r of d.rows) {
+    L.push(r.q
+      ? `| ${r.name}${r.core ? ' *' : ''} | ${r.ticker} | ${fmt(r.q.price)} | ${fmt(r.q.day)} | ${fmt(r.q.week)} | ${fmt(r.q.month)} | ${fmt(r.q.yoy)} |`
+      : `| ${r.name}${r.core ? ' *' : ''} | ${r.ticker} | unavailable | n/a | n/a | n/a | n/a |`)
+  }
+  L.push('')
+  const ranked = d.rows.filter((r) => r.q && r.q.day != null).sort((a, b) => b.q.day - a.q.day)
+  if (ranked.length) {
+    const winners = ranked.slice(0, 3)
+    const losers = ranked.slice(-3).reverse()
+    L.push('**Top movers (day):** ' + [
+      ...winners.map((r) => `${r.name} ${fmt(r.q.day)}%`),
+      ...losers.map((r) => `${r.name} ${fmt(r.q.day)}%`),
+    ].join(' · '))
+    L.push('')
+  }
+  const sections = [
+    ['Global macro headlines', 'macro'], ['Finland headlines', 'finland'],
+    ['Rating / target headlines', 'ratings'], ['Earnings headlines', 'earnings'],
+    ['Dividend headlines', 'dividends'], ['Geopolitics headlines', 'geopolitics'],
+    ['Trump / Musk headlines', 'posts'], ['Tech / manufacturing headlines', 'tech'],
+  ]
+  for (const [title, key] of sections) {
+    L.push(`## ${title}`)
+    L.push('')
+    L.push(...headlineLines(d.news[key]))
+    L.push('')
+  }
+  L.push('---')
+  L.push('')
+  L.push('Headlines are unverified RSS titles. Add a `DEEPSEEK_API_KEY` repository secret for the full narrated briefing.')
+  return L.join('\n')
+}
+
 function loadSpec() {
   try {
     const raw = readFileSync(join(ROOT, 'SKILL.md'), 'utf8')
@@ -257,19 +314,10 @@ The DATA block below is everything you know. Rules:
   const user = `DATA:\n${pack}\n\nProduce today's briefing now.`
 
   const deepseekKey = process.env.DEEPSEEK_API_KEY
-  const githubToken = process.env.GITHUB_TOKEN
-  let url, model, key
-  if (deepseekKey) {
-    url = 'https://api.deepseek.com/chat/completions'
-    model = process.env.MODEL || 'deepseek-chat'
-    key = deepseekKey
-  } else if (githubToken) {
-    url = 'https://models.github.ai/inference/chat/completions'
-    model = process.env.MODEL || 'openai/gpt-4o-mini'
-    key = githubToken
-  } else {
-    throw new Error('No model credential: set DEEPSEEK_API_KEY or GITHUB_TOKEN')
-  }
+  if (!deepseekKey) throw new Error('DEEPSEEK_API_KEY is not set')
+  const url = 'https://api.deepseek.com/chat/completions'
+  const model = process.env.MODEL || 'deepseek-chat'
+  const key = deepseekKey
 
   const body = {
     model,
@@ -321,7 +369,14 @@ async function main() {
     console.log(pack)
     return
   }
-  const markdown = await askModel(pack)
+  const markdown = await (async () => {
+    try {
+      return await askModel(pack)
+    } catch (e) {
+      console.warn(`model unavailable (${e.message}); writing data-only digest`)
+      return renderDigest(data)
+    }
+  })()
   if (!markdown.startsWith('#')) throw new Error('Model returned unexpected output')
   await writeOutput(markdown)
 }

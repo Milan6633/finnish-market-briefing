@@ -1,0 +1,67 @@
+name: Daily briefing
+
+on:
+  schedule:
+    # 03:30 UTC = 06:30 Helsinki in summer (EEST), 05:30 in winter (EET).
+    - cron: "30 3 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  models: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-briefing
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Generate briefing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          MODEL: ${{ vars.MODEL }}
+        run: node scripts/generate.mjs
+
+      - name: Commit briefing
+        run: |
+          git config user.name "briefing-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- briefings; then
+            git add briefings
+            git commit -m "briefing: $(date -u +%F)"
+            git push
+          else
+            echo "No briefing changes to commit."
+          fi
+
+      - name: Stage site
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -r briefings _site/briefings
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: generate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

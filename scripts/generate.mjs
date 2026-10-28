@@ -67,17 +67,32 @@ async function quote(symbol) {
     const raw = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`)
     const res = JSON.parse(raw)?.chart?.result?.[0]
     const meta = res?.meta
-    const closes = (res?.indicators?.quote?.[0]?.close ?? []).filter((v) => v != null)
-    if (!meta || closes.length < 3) return null
-    const last = meta.regularMarketPrice ?? closes[closes.length - 1]
+    const closes = res?.indicators?.quote?.[0]?.close ?? []
+    const stamps = res?.timestamp ?? []
+    const pairs = []
+    for (let i = 0; i < closes.length; i++) {
+      if (closes[i] != null && stamps[i] != null) pairs.push({ t: stamps[i], c: closes[i] })
+    }
+    if (!meta || pairs.length < 25) return null
+    const off = meta.gmtoffset ?? 0
+    const dayKey = (sec) => new Date((sec + off) * 1000).toISOString().slice(0, 10)
+    const lastPrice = meta.regularMarketPrice ?? pairs[pairs.length - 1].c
+    const lastBar = pairs[pairs.length - 1]
+    // When the newest bar belongs to the session the live price is in (its close
+    // is still undefined), the previous close is that bar; otherwise it is the
+    // bar before it. Comparing straight to closes[-2] silently skips a session.
+    const prev = dayKey(lastBar.t) === dayKey(meta.regularMarketTime ?? lastBar.t)
+      ? pairs[pairs.length - 2].c
+      : lastBar.c
+    const back = (n) => pairs[Math.max(0, pairs.length - n)]?.c
     return {
       symbol,
-      price: last,
+      price: lastPrice,
       currency: meta.currency ?? 'EUR',
-      day: pct(last, closes[closes.length - 2]),
-      week: pct(last, closes[closes.length - 6]),
-      month: pct(last, closes[closes.length - 22]),
-      yoy: pct(last, closes[0]),
+      day: pct(lastPrice, prev),
+      week: pct(lastPrice, back(6)),
+      month: pct(lastPrice, back(22)),
+      yoy: pct(lastPrice, pairs[0].c),
       asOf: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : null,
     }
   } catch (e) {
